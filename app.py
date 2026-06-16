@@ -38,17 +38,28 @@ def fetch_stock_data():
             
             if not hist.empty:
                 # =========================================================
-                # 抓取盤中即時價格 (修正 Yahoo 時區換日 Bug)
-                # 改抓最近 5 天的 1 分鐘線，確保能無視時區抓到最新的一筆報價
+                # 抓取盤中即時價格 (終極修正法)
+                # 放棄容易延遲的歷史 K 線，改用 info 直接抓取網頁版最即時的報價
                 # =========================================================
-                recent_data = ticker_obj.history(period="5d", interval="1m")
-                if not recent_data.empty:
-                    realtime_price = recent_data['Close'].iloc[-1]
-                else:
-                    realtime_price = hist['Close'].iloc[-1]
+                try:
+                    # 嘗試獲取最即時的 currentPrice 或 regularMarketPrice
+                    info = ticker_obj.info
+                    realtime_price = info.get('currentPrice') or info.get('regularMarketPrice')
+                    
+                    # 雙重保險：如果 info 臨時壞掉抓不到，退回使用最近 5 天日線的最後一筆
+                    if realtime_price is None:
+                        recent_data = ticker_obj.history(period="5d")
+                        realtime_price = recent_data['Close'].iloc[-1]
+                except Exception:
+                    # 發生任何錯誤時的最終備案
+                    recent_data = ticker_obj.history(period="5d")
+                    if not recent_data.empty:
+                        realtime_price = recent_data['Close'].iloc[-1]
+                    else:
+                        realtime_price = hist['Close'].iloc[-1]
 
                 # =========================================================
-                #  通用型動態分割與除權息修正演算法
+                #  通用型動態分割與除權息修正演算法 (處理歷史天價)
                 # =========================================================
                 for i in range(1, len(hist)):
                     prev_close = float(hist['Close'].iloc[i-1])
