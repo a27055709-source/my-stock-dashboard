@@ -98,7 +98,7 @@ for idx, name in enumerate(targets):
     with input_cols[idx]:
         user_ath_prices[name] = st.number_input(
             f"{name} 歷史天價", 
-            value=data_source[name]["ath"],
+            value=float(data_source[name]["ath"]),
             step=0.1,
             format="%.2f"
         )
