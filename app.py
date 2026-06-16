@@ -2,7 +2,7 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 import datetime
-import pytz  # [新增] 匯入時區套件
+import pytz  
 
 # --- 網頁基本設定 ---
 st.set_page_config(
@@ -12,7 +12,6 @@ st.set_page_config(
 )
 
 # --- 標題與即時時間 (強制設定為台灣時間) ---
-# [修改] 使用 pytz 指定為 'Asia/Taipei' 時區
 tw_timezone = pytz.timezone('Asia/Taipei')
 current_time = datetime.datetime.now(tw_timezone).strftime('%Y-%m-%d %H:%M:%S')
 
@@ -38,10 +37,13 @@ def fetch_stock_data():
             hist = ticker_obj.history(period="max")
             
             if not hist.empty:
-                # 抓取盤中即時價格
-                today_data = ticker_obj.history(period="1d", interval="1m")
-                if not today_data.empty:
-                    realtime_price = today_data['Close'].iloc[-1]
+                # =========================================================
+                # 抓取盤中即時價格 (修正 Yahoo 時區換日 Bug)
+                # 改抓最近 5 天的 1 分鐘線，確保能無視時區抓到最新的一筆報價
+                # =========================================================
+                recent_data = ticker_obj.history(period="5d", interval="1m")
+                if not recent_data.empty:
+                    realtime_price = recent_data['Close'].iloc[-1]
                 else:
                     realtime_price = hist['Close'].iloc[-1]
 
