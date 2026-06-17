@@ -56,11 +56,23 @@ def fetch_stock_data():
 
                 # =========================================================
                 # 0. 修正 Yahoo 資料庫常見的單日「異常天價」Bug (資料清洗)
-                # 台股單日極限波動通常為 10%，若最高價(High)離譜地大於收盤與開盤價 1.2倍以上，必為錯誤資料
+                # 利用台股 10% 漲跌幅限制：找出比前後日收盤價暴增 15% 以上的孤立錯誤數據
                 # =========================================================
-                bad_data_mask = (hist['High'] > hist['Close'] * 1.2) & (hist['High'] > hist['Open'] * 1.2)
-                # 若發現異常，以當日的開盤/收盤價之最大值作為合理的最高價取代
-                hist.loc[bad_data_mask, 'High'] = hist[['Open', 'Close']].max(axis=1)
+                if len(hist) > 2:
+                    prev_c = hist['Close'].shift(1)
+                    # 針對最後一筆資料，沒有 next_c，直接以 prev_c 代替檢查
+                    next_c = hist['Close'].shift(-1).fillna(prev_c)
+                    
+                    glitch_mask = (hist['High'] > prev_c * 1.15) & (hist['High'] > next_c * 1.15)
+                    
+                    for idx in hist[glitch_mask].index:
+                        # 若連收盤價都錯得離譜，用前一天收盤價強制覆蓋
+                        if hist.loc[idx, 'Close'] > prev_c.loc[idx] * 1.15:
+                            hist.loc[idx, 'High'] = prev_c.loc[idx]
+                            hist.loc[idx, 'Close'] = prev_c.loc[idx]
+                        else:
+                            # 只有 High 錯掉，壓回當日開盤與收盤的較高者
+                            hist.loc[idx, 'High'] = max(hist.loc[idx, 'Open'], hist.loc[idx, 'Close'])
 
                 # =========================================================
                 #  通用型動態分割與除權息修正演算法 (處理歷史天價)
@@ -73,6 +85,12 @@ def fetch_stock_data():
                         drop_ratio = (prev_close - curr_close) / prev_close
                         
                         if drop_ratio > 0.25: # 提高容錯門檻至 25%，避開正常跌停
+                            # 增加防呆：避免單日向下錯帳被誤認為分割，檢查隔天是否暴漲回歸
+                            if i < len(hist) - 1:
+                                next_close = float(hist['Close'].iloc[i+1])
+                                if (next_close - curr_close) / curr_close > 0.25:
+                                    continue # 這是單日錯帳，直接跳過分割處理
+                                    
                             ratio = prev_close / curr_close
                             if abs(ratio - round(ratio)) < 0.15:
                                 ratio = float(round(ratio))
