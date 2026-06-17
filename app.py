@@ -55,42 +55,35 @@ def fetch_stock_data():
                         realtime_price = hist['Close'].iloc[-1]
 
                 # =========================================================
-                # 0. 修正 Yahoo 資料庫常見的單日「異常天價」Bug (資料清洗)
-                # 利用台股 10% 漲跌幅限制：找出比前後日收盤價暴增 15% 以上的孤立錯誤數據
+                # 0. 終極除錯濾網：過濾 Yahoo 歷史資料庫中的「幽靈天價」(如台積電 2433.51)
                 # =========================================================
-                if len(hist) > 2:
-                    prev_c = hist['Close'].shift(1)
-                    # 針對最後一筆資料，沒有 next_c，直接以 prev_c 代替檢查
-                    next_c = hist['Close'].shift(-1).fillna(prev_c)
-                    
-                    glitch_mask = (hist['High'] > prev_c * 1.15) & (hist['High'] > next_c * 1.15)
-                    
-                    for idx in hist[glitch_mask].index:
-                        # 若連收盤價都錯得離譜，用前一天收盤價強制覆蓋
-                        if hist.loc[idx, 'Close'] > prev_c.loc[idx] * 1.15:
-                            hist.loc[idx, 'High'] = prev_c.loc[idx]
-                            hist.loc[idx, 'Close'] = prev_c.loc[idx]
-                        else:
-                            # 只有 High 錯掉，壓回當日開盤與收盤的較高者
-                            hist.loc[idx, 'High'] = max(hist.loc[idx, 'Open'], hist.loc[idx, 'Close'])
+                # 先填補可能的缺失值
+                hist['Close'] = hist['Close'].ffill()
+                hist['High'] = hist['High'].ffill()
+                
+                # 濾網 A (單日內防呆)：台股單日極限波動為 10%。若當日最高價超過收盤價 20%，直接判定為極端錯帳。
+                bad_high = hist['High'] > (hist['Close'] * 1.20)
+                hist.loc[bad_high, 'High'] = hist.loc[bad_high, 'Close']
+
+                # 濾網 B (多日錯帳防呆)：使用 11 天「置中滾動中位數」。
+                # 中位數的數學特性可以完美保留真實的「股票分割/跳空斷層」，但會過濾掉孤立的暴衝錯帳。
+                # 若收盤價無故比鄰近 11 天的中位數暴增 50% (1.5倍) 以上，強制壓回合理中位數。
+                rolling_close = hist['Close'].rolling(window=11, min_periods=1, center=True).median()
+                bad_close = hist['Close'] > (rolling_close * 1.50)
+                hist.loc[bad_close, 'Close'] = rolling_close[bad_close]
+                hist.loc[bad_close, 'High'] = rolling_close[bad_close]
 
                 # =========================================================
                 #  通用型動態分割與除權息修正演算法 (處理歷史天價)
                 # =========================================================
                 for i in range(1, len(hist)):
                     prev_close = float(hist['Close'].iloc[i-1])
-                    curr_close = float(hist['Close'].iloc[i]) # 改用 Close 比對，避免 Open 錯誤觸發誤判
+                    curr_close = float(hist['Close'].iloc[i]) 
                     
                     if prev_close > 0 and curr_close > 0:
                         drop_ratio = (prev_close - curr_close) / prev_close
                         
                         if drop_ratio > 0.25: # 提高容錯門檻至 25%，避開正常跌停
-                            # 增加防呆：避免單日向下錯帳被誤認為分割，檢查隔天是否暴漲回歸
-                            if i < len(hist) - 1:
-                                next_close = float(hist['Close'].iloc[i+1])
-                                if (next_close - curr_close) / curr_close > 0.25:
-                                    continue # 這是單日錯帳，直接跳過分割處理
-                                    
                             ratio = prev_close / curr_close
                             if abs(ratio - round(ratio)) < 0.15:
                                 ratio = float(round(ratio))
@@ -113,7 +106,7 @@ def fetch_stock_data():
     return results
 
 # --- 執行資料抓取 ---
-with st.spinner("正在連線 Yahoo Finance 獲取最新行情與分割修正數據..."):
+with st.spinner("正在連線 Yahoo Finance 獲取最新行情與過濾雜訊數據..."):
     data_source = fetch_stock_data()
 
 # --- 互動式：手動修改歷史天價區塊 ---
