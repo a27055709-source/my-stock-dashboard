@@ -57,17 +57,12 @@ def fetch_stock_data():
                 # =========================================================
                 # 0. 終極除錯濾網：過濾 Yahoo 歷史資料庫中的「幽靈天價」(如台積電 2433.51)
                 # =========================================================
-                # 先填補可能的缺失值
                 hist['Close'] = hist['Close'].ffill()
                 hist['High'] = hist['High'].ffill()
                 
-                # 濾網 A (單日內防呆)：台股單日極限波動為 10%。若當日最高價超過收盤價 20%，直接判定為極端錯帳。
                 bad_high = hist['High'] > (hist['Close'] * 1.20)
                 hist.loc[bad_high, 'High'] = hist.loc[bad_high, 'Close']
 
-                # 濾網 B (多日錯帳防呆)：使用 11 天「置中滾動中位數」。
-                # 中位數的數學特性可以完美保留真實的「股票分割/跳空斷層」，但會過濾掉孤立的暴衝錯帳。
-                # 若收盤價無故比鄰近 11 天的中位數暴增 50% (1.5倍) 以上，強制壓回合理中位數。
                 rolling_close = hist['Close'].rolling(window=11, min_periods=1, center=True).median()
                 bad_close = hist['Close'] > (rolling_close * 1.50)
                 hist.loc[bad_close, 'Close'] = rolling_close[bad_close]
@@ -83,7 +78,7 @@ def fetch_stock_data():
                     if prev_close > 0 and curr_close > 0:
                         drop_ratio = (prev_close - curr_close) / prev_close
                         
-                        if drop_ratio > 0.25: # 提高容錯門檻至 25%，避開正常跌停
+                        if drop_ratio > 0.25: 
                             ratio = prev_close / curr_close
                             if abs(ratio - round(ratio)) < 0.15:
                                 ratio = float(round(ratio))
@@ -129,22 +124,21 @@ for idx, name in enumerate(targets):
 # --- 建立核心回檔數據表格 ---
 st.subheader("📊 回檔策略佈局矩陣（黃色區塊代表已跌破該關卡）")
 
-row_headers = [
-    "歷史最高價 (基準)", 
-    "盤中即時價", 
-    "目前回檔 %", 
-    "回檔 10%", 
-    "回檔 15%", 
-    "回檔 20%", 
-    "回檔 25%", 
-    "回檔 30%"
-]
+# 自動產生從 5% 到 95% 的清單列表
+drawdown_percentages = list(range(5, 100, 5))
 
+# 動態產生橫列標題
+row_headers = ["歷史最高價 (基準)", "盤中即時價", "目前回檔 %"]
+for p in drawdown_percentages:
+    row_headers.append(f"回檔 {p}%")
+
+# 計算矩陣數值
 matrix_data = {name: [] for name in targets}
 for name in targets:
     ath = user_ath_prices[name]
     realtime = data_source[name]["realtime"]
     
+    # 計算「目前回檔 %」
     if ath > 0:
         if realtime >= ath:
             drawdown_pct = 0.0  
@@ -156,11 +150,11 @@ for name in targets:
     matrix_data[name].append(ath)
     matrix_data[name].append(realtime)
     matrix_data[name].append(drawdown_pct)
-    matrix_data[name].append(ath * 0.90)   
-    matrix_data[name].append(ath * 0.85)   
-    matrix_data[name].append(ath * 0.80)   
-    matrix_data[name].append(ath * 0.75)   
-    matrix_data[name].append(ath * 0.70)   
+    
+    # 自動計算並填入從 5% 到 95% 的所有回檔價格
+    for p in drawdown_percentages:
+        multiplier = 1 - (p / 100.0)
+        matrix_data[name].append(ath * multiplier)
 
 df = pd.DataFrame(matrix_data, index=row_headers)
 
@@ -169,7 +163,8 @@ df = pd.DataFrame(matrix_data, index=row_headers)
 # =========================================================
 def highlight_breakthrough(row):
     styles = [''] * len(row)
-    if row.name in ["回檔 10%", "回檔 15%", "回檔 20%", "回檔 25%", "回檔 30%"]:
+    # 動態判斷：只要該橫列名稱以 "回檔" 開頭，就套用黃燈比對邏輯
+    if str(row.name).startswith("回檔 "):
         for col_idx, name in enumerate(row.index):
             realtime_p = matrix_data[name][1]  
             target_p = row[name]               
@@ -187,10 +182,11 @@ for row_name in row_headers:
     else:
         styled_df = styled_df.format(lambda x: f"{x:.2f}", subset=pd.IndexSlice[[row_name], :])
 
+# 調整表格高度 (設定為 850) 以容納一路到 95% 的大量行數
 st.dataframe(
     styled_df,
     use_container_width=True,
-    height=360
+    height=850
 )
 
 # --- 功能控制按鈕 ---
